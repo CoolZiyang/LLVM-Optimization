@@ -70,7 +70,7 @@ class Info {
 template <class Info, bool Direction>
 class DataFlowAnalysis {
 
-  private:
+  protected:
 		typedef std::pair<unsigned, unsigned> Edge;
 		// Index to instruction map
 		std::map<unsigned, Instruction *> IndexToInstr;
@@ -79,8 +79,8 @@ class DataFlowAnalysis {
 		// Edge to information map
 		std::map<Edge, Info *> EdgeToInfo;
 		// The bottom of the lattice
-    Info Bottom;
-    // The initial state of the analysis
+	    Info Bottom;
+	    // The initial state of the analysis
 		Info InitialState;
 		// EntryInstr points to the first instruction to be processed in the analysis
 		Instruction * EntryInstr;
@@ -203,7 +203,6 @@ class DataFlowAnalysis {
 					Instruction * next = &(succ->front());
 					addEdge(term, next, &Bottom);
 				}
-
 			}
 
 			EntryInstr = (Instruction *) &((func->front()).front());
@@ -217,7 +216,52 @@ class DataFlowAnalysis {
 		 *   Implement the following function in part 3 for backward analyses
 		 */
 		void initializeBackwardMap(Function * func) {
+			assignIndiceToInstrs(func);
 
+			for (Function::iterator bi = func->begin(), e = func->end(); bi != e; ++bi) {
+				BasicBlock * block = &*bi;
+
+				Instruction * firstInstr = &(block->front());
+
+				// Initialize outgoing edges to the basic block
+				for (auto pi = pred_begin(block), pe = pred_end(block); pi != pe; ++pi) {
+					BasicBlock * prev = *pi;
+					Instruction * dst = (Instruction *)prev->getTerminator();
+					Instruction * src = firstInstr;
+					addEdge(src, dst, &Bottom);
+				}
+
+				// If there is at least one phi node, add an edge from the first non-phi node instruction in the basic block
+				// to the first phi node.
+				if (isa<PHINode>(firstInstr)) {
+					addEdge(block->getFirstNonPHI(), firstInstr, &Bottom);
+				}
+
+				// Initialize edges within the basic block
+				for (auto ii = block->begin(), ie = block->end(); ii != ie; ++ii) {
+					Instruction * instr = &*ii;
+					if (isa<PHINode>(instr))
+						continue;
+					if (instr == (Instruction *)block->getTerminator())
+						break;
+					Instruction * next = instr->getNextNode();
+					addEdge(next, instr, &Bottom);
+				}
+
+				// Initialize incoming edges of the basic block
+				Instruction * term = (Instruction *)block->getTerminator();
+				for (auto si = succ_begin(block), se = succ_end(block); si != se; ++si) {
+					BasicBlock * succ = *si;
+					Instruction * next = &(succ->front());
+					addEdge(next, term, &Bottom);
+				}
+			}
+
+			// How to deal with the the last basic block (or last instruction) and dummy node
+			EntryInstr = (Instruction *) &((func->back()).back());
+			addEdge(nullptr, EntryInstr, &InitialState);
+
+			return;
 		}
 
     /*
@@ -255,6 +299,14 @@ class DataFlowAnalysis {
 			}
     }
 
+    std::map<Instruction *, unsigned> getInstrToIndex(){
+    	return InstrToIndex;
+    }
+
+    std::map<Edge, Info *> getEdgeToInfo(){
+    	return EdgeToInfo;
+    }
+
     /*
      * This function implements the work list algorithm in the following steps:
      * (1) Initialize info of each edge to bottom
@@ -277,8 +329,35 @@ class DataFlowAnalysis {
     	assert(EntryInstr != nullptr && "Entry instruction is null.");
 
     	// (2) Initialize the work list
+    	for (std::map<unsigned, Instruction *>::iterator it=IndexToInstr.begin(); it!=IndexToInstr.end(); ++it){
+    		if(it->first == 0)
+    			continue;
+    		worklist.push_back(it->first);
+    	}
 
     	// (3) Compute until the work list is empty
+    	while(worklist.size() != 0){
+    		unsigned idx = worklist.front();
+    		Instruction * instr = IndexToInstr[idx];
+    		worklist.pop_front();
+
+    		std::vector<unsigned> incomingNode, outgoingNode;
+    		getIncomingEdges(idx, &incomingNode);
+    		getOutgoingEdges(idx, &outgoingNode);
+
+    		std::vector<Info *> infos;
+    		// compute flow function
+    		flowfunction(instr, incomingNode, outgoingNode, infos);
+
+    		for (unsigned i = 0; i < outgoingNode.size(); ++i){
+    			Info * new_info = new Info();
+    			new_info = (Info*)Info::join(infos[i], EdgeToInfo[std::make_pair(idx, outgoingNode[i])], new_info);
+    			if(!Info::equals(EdgeToInfo[std::make_pair(idx, outgoingNode[i])], new_info)){
+    				EdgeToInfo[std::make_pair(idx, outgoingNode[i])] = new_info;
+    				worklist.push_back(outgoingNode[i]);
+    			}
+    		}
+    	}
     }
 };
 
